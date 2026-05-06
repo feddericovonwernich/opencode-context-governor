@@ -130,6 +130,30 @@ For quick testing, use very low thresholds:
 }
 ```
 
+## Agent skill
+
+This repository includes a bundled Hermes skill for agents that need to install, configure, test, or troubleshoot the plugin:
+
+```text
+skills/opencode-context-governor/SKILL.md
+```
+
+The skill gives agents a repeatable workflow for:
+
+- using the curl installer,
+- manually editing `.opencode/opencode.json`,
+- choosing production, conservative, or test thresholds,
+- running smoke tests,
+- debugging plugin-load issues,
+- preserving existing OpenCode config safely.
+
+If you want to use it as a personal Hermes skill, copy or symlink it into your Hermes skills directory, for example:
+
+```sh
+mkdir -p ~/.hermes/skills/opencode-context-governor
+cp skills/opencode-context-governor/SKILL.md ~/.hermes/skills/opencode-context-governor/SKILL.md
+```
+
 ## Test locally
 
 From this repository:
