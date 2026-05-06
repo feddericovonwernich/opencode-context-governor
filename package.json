@@ -1,0 +1,26 @@
+{
+  "name": "opencode-context-governor",
+  "version": "0.1.0",
+  "description": "OpenCode plugin that injects context-window budget awareness and handoff instructions without forking OpenCode.",
+  "type": "module",
+  "main": "./src/plugin.js",
+  "exports": {
+    "./server": "./src/plugin.js",
+    ".": "./src/plugin.js"
+  },
+  "engines": {
+    "opencode": ">=1.14.0"
+  },
+  "scripts": {
+    "check": "node --check src/plugin.js",
+    "smoke": "cd test-fixture && opencode run 'Say hello in one sentence. If you see CONTEXT BUDGET HANDOFF REQUIRED, follow it exactly.'"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "context-window",
+    "tokens",
+    "handoff"
+  ],
+  "license": "MIT"
+}

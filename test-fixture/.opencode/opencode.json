@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    [
+      "/home/fedderico/Workspace/projects/opencode-context-governor/src/plugin.js",
+      {
+        "enabled": true,
+        "informThreshold": 1,
+        "warnThreshold": 5,
+        "handoffThreshold": 10,
+        "reserveOutputTokens": 0,
+        "estimateCharsPerToken": 3,
+        "noteMode": "always",
+        "appendToolWarnings": true,
+        "mutateUserMessageAtHandoff": true,
+        "log": true,
+        "handoffInstruction": "Write a brief handoff letter and stop. For this test, mention CONTEXT_GOVERNOR_HANDOFF."
+      }
+    ]
+  ]
+}
