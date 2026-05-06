@@ -161,11 +161,20 @@ From this repository:
 ```sh
 npm run check
 npm run smoke
+npm run smoke:subagent
 ```
 
-The smoke test uses `test-fixture/.opencode/opencode.json`, which has tiny thresholds so handoff triggers immediately.
+The top-level smoke test uses `test-fixture/.opencode/opencode.json`, which has tiny thresholds so handoff triggers immediately.
 
-Expected behavior: OpenCode should run, the plugin should inject a context-budget handoff instruction, and the model should stop with a handoff message.
+The subagent smoke test uses `test-fixture-subagent/.opencode/opencode.json` plus a deterministic OpenCode command:
+
+```text
+test-fixture-subagent/.opencode/command/subagent-governor-smoke.md
+```
+
+That command is marked `agent: general` and `subtask: true`, so OpenCode creates a real Task-tool subagent session without relying on the primary model to decide to call the Task tool.
+
+Expected behavior: OpenCode should run, the plugin should inject a context-budget handoff instruction, and the model should stop with a handoff message. For the subagent smoke test, validation also checks that `.context-governor.log` contains at least two session IDs: the primary session and the subagent session.
 
 ## Options
 

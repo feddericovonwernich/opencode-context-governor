@@ -46,9 +46,12 @@ opencode-context-governor/
   README.md
   package.json
   scripts/install.sh
+  scripts/subagent-smoke.sh
   src/plugin.js
   skills/opencode-context-governor/SKILL.md
   test-fixture/.opencode/opencode.json
+  test-fixture-subagent/.opencode/opencode.json
+  test-fixture-subagent/.opencode/command/subagent-governor-smoke.md
 ```
 
 Key files:
@@ -57,6 +60,8 @@ Key files:
 - `scripts/install.sh`: guided installer for end users.
 - `README.md`: human-facing installation and configuration instructions.
 - `test-fixture/.opencode/opencode.json`: low-threshold fixture for smoke testing.
+- `scripts/subagent-smoke.sh`: deterministic subagent smoke test. It invokes an OpenCode command with `agent: general` and `subtask: true` so the Task-tool subagent path runs without relying on model choice.
+- `test-fixture-subagent/.opencode/command/subagent-governor-smoke.md`: command used by the subagent smoke test.
 
 ## Fast Installation Path
 
@@ -190,14 +195,17 @@ From the plugin repository:
 ```sh
 npm run check
 npm run smoke
+npm run smoke:subagent
 ```
 
 Expected results:
 
 - `node --check src/plugin.js` succeeds.
 - `bash -n scripts/install.sh` succeeds if installer validation is included in `npm run check`.
+- `bash -n scripts/subagent-smoke.sh` succeeds if subagent smoke validation is included in `npm run check`.
 - `npm run smoke` runs OpenCode from `test-fixture/`.
-- The smoke test should produce a context-governor handoff message because test thresholds are tiny.
+- The top-level smoke test should produce a context-governor handoff message because test thresholds are tiny.
+- `npm run smoke:subagent` runs OpenCode from `test-fixture-subagent/` using a deterministic command marked `agent: general` and `subtask: true`; it should observe at least two session IDs in `.context-governor.log` and output `SUBAGENT_CONTEXT_GOVERNOR_HANDOFF`.
 
 From a target project after installation:
 

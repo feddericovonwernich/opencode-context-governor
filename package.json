@@ -12,8 +12,9 @@
     "opencode": ">=1.14.0"
   },
   "scripts": {
-    "check": "node --check src/plugin.js && bash -n scripts/install.sh",
-    "smoke": "cd test-fixture && opencode run 'Say hello in one sentence. If you see CONTEXT BUDGET HANDOFF REQUIRED, follow it exactly.'"
+    "check": "node --check src/plugin.js && bash -n scripts/install.sh && bash -n scripts/subagent-smoke.sh",
+    "smoke": "cd test-fixture && opencode run 'Say hello in one sentence. If you see CONTEXT BUDGET HANDOFF REQUIRED, follow it exactly.'",
+    "smoke:subagent": "bash scripts/subagent-smoke.sh"
   },
   "keywords": [
     "opencode",

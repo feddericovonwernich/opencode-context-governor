@@ -6,3 +6,4 @@ node_modules/
 **/.opencode/.gitignore
 **/.opencode/context-governor.log
 **/.context-governor.log
+**/.subagent-smoke-output.txt

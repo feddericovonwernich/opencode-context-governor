@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    [
+      "/home/fedderico/Workspace/projects/opencode-context-governor/src/plugin.js",
+      {
+        "enabled": true,
+        "informThreshold": 1,
+        "warnThreshold": 180,
+        "handoffThreshold": 260,
+        "reserveOutputTokens": 0,
+        "estimateCharsPerToken": 3,
+        "noteMode": "always",
+        "appendToolWarnings": true,
+        "mutateUserMessageAtHandoff": true,
+        "log": true,
+        "handoffInstruction": "Reply exactly SUBAGENT_CONTEXT_GOVERNOR_HANDOFF and stop."
+      }
+    ]
+  ]
+}
