@@ -69,8 +69,9 @@ In any project, create or edit `.opencode/opencode.json`:
         "noteMode": "always",
         "appendToolWarnings": true,
         "mutateUserMessageAtHandoff": true,
+        "autoContinue": "off",
         "log": false,
-        "handoffInstruction": "Write a handoff letter and stop. Include current goal, repo state, files touched, important decisions, commands run, test status, risks, and exact next steps."
+        "handoffInstruction": "Write a handoff letter and stop. Put CONTEXT_GOVERNOR_HANDOFF on its own line, then include current goal, repo state, files touched, important decisions, commands run, test status, risks, and exact next steps."
       }
     ]
   ]
@@ -130,6 +131,41 @@ For quick testing, use very low thresholds:
 }
 ```
 
+## Auto-continue handoff
+
+By default, automatic continuation is disabled (`"autoContinue": "off"`) and existing handoff behavior is unchanged. When enabled, the assistant must include the configured marker (default `CONTEXT_GOVERNOR_HANDOFF`) in its completed handoff response before the plugin creates a child session. The default `handoffInstruction` asks the model to put that marker on its own line.
+
+Safe prepare-only mode creates a child session, deposits the handoff prompt, and does not ask the child model to answer:
+
+```json
+{
+  "autoContinue": "prepare-only",
+  "autoContinueMaxChain": 3,
+  "autoContinueSelectTui": true,
+  "log": true
+}
+```
+
+Full prompt-async mode creates the child session and immediately asks it to continue. This can spend additional model calls, so use it only when you want unattended continuation:
+
+```json
+{
+  "autoContinue": "prompt-async",
+  "autoContinueMaxChain": 3,
+  "autoContinueSelectTui": true,
+  "log": true
+}
+```
+
+Auto-continue creates the child with the previous session as `parentID`, sends the continuation with OpenCode `session.promptAsync`, and best-effort switches the TUI using OpenCode's internal transport endpoint `/tui/select-session`. That TUI switch is version-sensitive; failures are logged when `log` is enabled but do not fail the handoff.
+
+Anti-loop behavior:
+
+- A session can start only one continuation (`continuationStarted` prevents duplicates).
+- Continuation requires all of: handoff threshold requested, marker seen, assistant finished/idle, and `autoContinue` not `off`.
+- `autoContinueMaxChain` limits nested continuation depth.
+- A JSONL audit record is appended to `.context-governor-handoffs.jsonl` by default.
+
 ## Agent skill
 
 This repository includes a bundled Hermes skill for agents that need to install, configure, test, or troubleshoot the plugin:
@@ -162,6 +198,8 @@ From this repository:
 npm run check
 npm run smoke
 npm run smoke:subagent
+npm run smoke:auto-prepare
+npm run smoke:auto-prompt-async
 ```
 
 The top-level smoke test uses `test-fixture/.opencode/opencode.json`, which has tiny thresholds so handoff triggers immediately.
@@ -189,6 +227,13 @@ Expected behavior: OpenCode should run, the plugin should inject a context-budge
 - `mutateUserMessageAtHandoff`: add a current-turn system instruction when the user message itself crosses threshold.
 - `log`: write debug log to `.context-governor.log` in the project root.
 - `handoffInstruction`: custom instruction used when threshold is crossed.
+- `autoContinue`: `off`, `prepare-only`, or `prompt-async`; default `off`.
+- `autoContinueSelectTui`: best-effort switch to the child session in the OpenCode TUI; default `true`.
+- `autoContinueMaxChain`: maximum nested auto-continuation depth; default `3`.
+- `autoContinueHandoffMarker`: required marker in the assistant handoff; default `CONTEXT_GOVERNOR_HANDOFF`.
+- `autoContinueStateFile`: JSONL audit file; default `.context-governor-handoffs.jsonl`.
+- `autoContinueTitlePrefix`: title prefix used for child continuation sessions.
+- `autoContinueInstruction`: instruction prepended to the handoff text sent to the child session.
 
 ## Debug log
 

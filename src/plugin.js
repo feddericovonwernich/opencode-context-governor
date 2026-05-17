@@ -9,8 +9,16 @@ const DEFAULTS = {
   appendToolWarnings: true,
   mutateUserMessageAtHandoff: true,
   log: false,
+  autoContinue: "off",
+  autoContinueSelectTui: true,
+  autoContinueMaxChain: 3,
+  autoContinueHandoffMarker: "CONTEXT_GOVERNOR_HANDOFF",
+  autoContinueStateFile: ".context-governor-handoffs.jsonl",
+  autoContinueTitlePrefix: "Context Governor continuation",
+  autoContinueInstruction:
+    "Continue from the handoff below. Preserve decisions and state, verify before making changes, and proceed with the next concrete step.",
   handoffInstruction:
-    "Write a handoff letter and stop. Include current goal, repo state, files touched, important decisions, commands run, test status, risks, and exact next steps.",
+    "Write a handoff letter and stop. Put CONTEXT_GOVERNOR_HANDOFF on its own line, then include current goal, repo state, files touched, important decisions, commands run, test status, risks, and exact next steps.",
 }
 
 function numberOption(value, fallback) {
@@ -23,6 +31,10 @@ function booleanOption(value, fallback) {
 
 function stringOption(value, fallback) {
   return typeof value === "string" && value.trim() ? value : fallback
+}
+
+function normalizeAutoContinueMode(value) {
+  return ["off", "prepare-only", "prompt-async"].includes(value) ? value : DEFAULTS.autoContinue
 }
 
 function normalizeOptions(options = {}) {
@@ -40,6 +52,16 @@ function normalizeOptions(options = {}) {
       DEFAULTS.mutateUserMessageAtHandoff,
     ),
     log: booleanOption(options.log, DEFAULTS.log),
+    autoContinue: normalizeAutoContinueMode(options.autoContinue),
+    autoContinueSelectTui: booleanOption(options.autoContinueSelectTui, DEFAULTS.autoContinueSelectTui),
+    autoContinueMaxChain: Math.max(0, Math.floor(numberOption(options.autoContinueMaxChain, DEFAULTS.autoContinueMaxChain))),
+    autoContinueHandoffMarker: stringOption(
+      options.autoContinueHandoffMarker,
+      DEFAULTS.autoContinueHandoffMarker,
+    ),
+    autoContinueStateFile: stringOption(options.autoContinueStateFile, DEFAULTS.autoContinueStateFile),
+    autoContinueTitlePrefix: stringOption(options.autoContinueTitlePrefix, DEFAULTS.autoContinueTitlePrefix),
+    autoContinueInstruction: stringOption(options.autoContinueInstruction, DEFAULTS.autoContinueInstruction),
     handoffInstruction: stringOption(options.handoffInstruction, DEFAULTS.handoffInstruction),
   }
 }
@@ -69,6 +91,14 @@ function getSession(states, sessionID) {
     modelID: undefined,
     providerID: undefined,
     thresholdCrossed: false,
+    handoffRequested: false,
+    handoffMarkerSeen: false,
+    handoffText: "",
+    assistantFinished: false,
+    continuationStarted: false,
+    childSessionID: undefined,
+    chainDepth: 0,
+    agent: undefined,
     lastUpdated: Date.now(),
   }
   states.set(id, created)
@@ -155,11 +185,188 @@ function extractEventSessionID(event, part) {
   return (
     part?.sessionID ||
     part?.session_id ||
+    part?.message?.sessionID ||
+    part?.message?.session_id ||
     event?.properties?.sessionID ||
     event?.properties?.session_id ||
+    event?.properties?.session?.id ||
+    event?.properties?.message?.sessionID ||
+    event?.properties?.message?.session_id ||
+    event?.properties?.part?.sessionID ||
+    event?.properties?.part?.session_id ||
     event?.sessionID ||
-    event?.session_id
+    event?.session_id ||
+    event?.session?.id ||
+    event?.message?.sessionID ||
+    event?.message?.session_id
   )
+}
+
+function eventType(event) {
+  return String(
+    event?.type ||
+      event?.name ||
+      event?.event ||
+      event?.properties?.type ||
+      event?.properties?.name ||
+      event?.properties?.event ||
+      "",
+  )
+}
+
+function isAssistantRole(value) {
+  return value?.role === "assistant" || value?.message?.role === "assistant"
+}
+
+function textFromPart(part) {
+  if (!part || typeof part !== "object") return ""
+  const type = String(part.type || "")
+  const looksLikeText = !type || type.includes("text") || type.includes("content") || type.includes("delta")
+  if (!looksLikeText) return ""
+  return [part.text, part.delta, part.content]
+    .filter((value) => typeof value === "string")
+    .join("")
+}
+
+function extractAssistantText(event) {
+  const candidates = [
+    event?.properties?.part,
+    event?.properties?.message?.part,
+    event?.part,
+    event?.message?.part,
+  ].filter(Boolean)
+
+  const messages = [event?.properties?.message, event?.message].filter(Boolean)
+  for (const message of messages) {
+    if (Array.isArray(message.parts)) candidates.push(...message.parts)
+    if (isAssistantRole(message) && typeof message.text === "string") candidates.push({ type: "text", text: message.text })
+    if (isAssistantRole(message) && typeof message.content === "string") candidates.push({ type: "text", text: message.content })
+  }
+
+  return candidates.map(textFromPart).filter(Boolean).join("")
+}
+
+function isAssistantFinishedEvent(event, part) {
+  const type = eventType(event).toLowerCase()
+  if (part?.type === "step-finish") return true
+  if (type.includes("session.idle") || type.includes("session_idle")) return true
+  if (type.includes("step.finish") || type.includes("step-finish")) return true
+
+  const messages = [event?.properties?.message, event?.message].filter(Boolean)
+  return messages.some((message) => {
+    const status = String(message.status || message.state || "").toLowerCase()
+    return isAssistantRole(message) && ["completed", "complete", "done", "finished"].includes(status)
+  })
+}
+
+function compactHandoffText(text, marker) {
+  const value = String(text || "").trim()
+  if (!value) return marker
+  const markerIndex = value.indexOf(marker)
+  const selected = markerIndex >= 0 ? value.slice(markerIndex) : value
+  return selected.length > 40_000 ? selected.slice(selected.length - 40_000) : selected
+}
+
+function stateFilePath(ctx, cfg) {
+  return cfg.autoContinueStateFile.startsWith("/")
+    ? cfg.autoContinueStateFile
+    : `${ctx.directory}/${cfg.autoContinueStateFile}`
+}
+
+async function appendJsonl(ctx, cfg, record) {
+  const { appendFile, mkdir } = await import("node:fs/promises")
+  await mkdir(ctx.directory, { recursive: true }).catch(() => {})
+  await appendFile(stateFilePath(ctx, cfg), `${JSON.stringify(record)}\n`).catch(() => {})
+}
+
+function buildContinuationPrompt(cfg, state) {
+  return [
+    cfg.autoContinueInstruction,
+    "",
+    `Previous session ID: ${state.sessionID}`,
+    `Continuation chain depth: ${state.chainDepth + 1}`,
+    "",
+    "Handoff from previous assistant response:",
+    "```text",
+    compactHandoffText(state.handoffText, cfg.autoContinueHandoffMarker),
+    "```",
+  ].join("\n")
+}
+
+function childSessionIDFromCreate(result) {
+  return result?.id || result?.sessionID || result?.session?.id || result?.data?.id || result?.data?.sessionID || result?.data?.session?.id
+}
+
+async function selectTuiSession(ctx, cfg, sessionID) {
+  if (!cfg.autoContinueSelectTui || !sessionID) return
+  try {
+    const response = await ctx.client?._client?.post?.({
+      url: "/tui/select-session",
+      query: { directory: ctx.directory },
+      body: { sessionID },
+    })
+    await writeLog(ctx, cfg, `auto-continue tui-select child=${sessionID} data=${JSON.stringify(response?.data ?? response)}`)
+  } catch (error) {
+    await writeLog(ctx, cfg, `auto-continue tui-select failed child=${sessionID} error=${error?.message || error}`)
+  }
+}
+
+async function createContinuationSession(ctx, cfg, states, state) {
+  const title = `${cfg.autoContinueTitlePrefix}: ${state.sessionID}`
+  const noReply = cfg.autoContinue === "prepare-only"
+  const record = {
+    time: new Date().toISOString(),
+    mode: cfg.autoContinue,
+    parentSessionID: state.sessionID,
+    chainDepth: state.chainDepth,
+    marker: cfg.autoContinueHandoffMarker,
+  }
+
+  try {
+    const created = await ctx.client.session.create({
+      query: { directory: ctx.directory },
+      body: { parentID: state.sessionID, title },
+    })
+    const childID = childSessionIDFromCreate(created)
+    if (!childID) throw new Error("OpenCode did not return a child session id")
+    state.childSessionID = childID
+
+    const childState = getSession(states, childID)
+    childState.chainDepth = state.chainDepth + 1
+
+    await selectTuiSession(ctx, cfg, childID)
+
+    const body = {
+      noReply,
+      parts: [{ type: "text", text: buildContinuationPrompt(cfg, state) }],
+    }
+    if (state.agent) body.agent = state.agent
+    await ctx.client.session.promptAsync({
+      path: { id: childID },
+      query: { directory: ctx.directory },
+      body,
+    })
+    await selectTuiSession(ctx, cfg, childID)
+
+    await appendJsonl(ctx, cfg, { ...record, childSessionID: childID, noReply, status: "created" })
+    await writeLog(ctx, cfg, `auto-continue created parent=${state.sessionID} child=${childID} mode=${cfg.autoContinue} noReply=${noReply}`)
+  } catch (error) {
+    await appendJsonl(ctx, cfg, { ...record, status: "failed", error: String(error?.message || error) })
+    await writeLog(ctx, cfg, `auto-continue failed parent=${state.sessionID} error=${error?.message || error}`)
+  }
+}
+
+async function maybeStartContinuation(ctx, cfg, states, state) {
+  if (cfg.autoContinue === "off") return
+  if (!state.handoffRequested || !state.handoffMarkerSeen || !state.assistantFinished) return
+  if (state.continuationStarted) return
+  if (state.chainDepth >= cfg.autoContinueMaxChain) {
+    await writeLog(ctx, cfg, `auto-continue max-chain parent=${state.sessionID} depth=${state.chainDepth} max=${cfg.autoContinueMaxChain}`)
+    return
+  }
+  state.continuationStarted = true
+  await writeLog(ctx, cfg, `auto-continue trigger parent=${state.sessionID} depth=${state.chainDepth} mode=${cfg.autoContinue}`)
+  await createContinuationSession(ctx, cfg, states, state)
 }
 
 async function writeLog(ctx, cfg, line) {
@@ -189,20 +396,39 @@ async function server(ctx, options) {
     event: async ({ event }) => {
       if (!cfg.enabled) return
       const part = extractStepFinishPart(event)
-      if (!part) return
       const state = getSession(states, extractEventSessionID(event, part))
-      state.lastExactInputTokens = part.tokens.input || 0
-      state.lastExactOutputTokens = part.tokens.output || 0
-      state.lastExactReasoningTokens = part.tokens.reasoning || 0
-      // The next request's input will include the assistant result that was just produced.
-      state.pendingEstimatedTokens = state.lastExactOutputTokens + state.lastExactReasoningTokens
-      state.thresholdCrossed = levelFor(estimateCurrent(state), cfg) === "handoff"
-      state.lastUpdated = Date.now()
-      await writeLog(
-        ctx,
-        cfg,
-        `step-finish session=${state.sessionID} input=${state.lastExactInputTokens} output=${state.lastExactOutputTokens} reasoning=${state.lastExactReasoningTokens} pending=${state.pendingEstimatedTokens}`,
-      )
+
+      if (state.handoffRequested) {
+        const text = extractAssistantText(event)
+        if (text) {
+          state.handoffText += text
+          if (!state.handoffMarkerSeen && state.handoffText.includes(cfg.autoContinueHandoffMarker)) {
+            state.handoffMarkerSeen = true
+            await writeLog(ctx, cfg, `auto-continue marker-seen session=${state.sessionID}`)
+          }
+        }
+        if (state.handoffMarkerSeen && isAssistantFinishedEvent(event, part)) {
+          state.assistantFinished = true
+          await writeLog(ctx, cfg, `auto-continue assistant-finished session=${state.sessionID} event=${eventType(event)}`)
+        }
+      }
+
+      if (part) {
+        state.lastExactInputTokens = part.tokens.input || 0
+        state.lastExactOutputTokens = part.tokens.output || 0
+        state.lastExactReasoningTokens = part.tokens.reasoning || 0
+        // The next request's input will include the assistant result that was just produced.
+        state.pendingEstimatedTokens = state.lastExactOutputTokens + state.lastExactReasoningTokens
+        state.thresholdCrossed = levelFor(estimateCurrent(state), cfg) === "handoff"
+        state.lastUpdated = Date.now()
+        await writeLog(
+          ctx,
+          cfg,
+          `step-finish session=${state.sessionID} input=${state.lastExactInputTokens} output=${state.lastExactOutputTokens} reasoning=${state.lastExactReasoningTokens} pending=${state.pendingEstimatedTokens}`,
+        )
+      }
+
+      await maybeStartContinuation(ctx, cfg, states, state)
     },
 
     "chat.message": async (input, output) => {
@@ -217,8 +443,13 @@ async function server(ctx, options) {
         state.providerID = input.model.providerID || state.providerID
         state.modelID = input.model.modelID || state.modelID
       }
+      state.agent = input.agent || input.agentID || input.agentName || state.agent
       const level = levelFor(estimateCurrent(state), cfg)
       state.thresholdCrossed = level === "handoff"
+      if (level === "handoff" && !state.handoffRequested) {
+        state.handoffRequested = true
+        await writeLog(ctx, cfg, `auto-continue requested session=${state.sessionID} source=chat.message`)
+      }
       if (cfg.mutateUserMessageAtHandoff && level === "handoff") {
         output.message.system = [
           output.message.system,
@@ -238,8 +469,13 @@ async function server(ctx, options) {
       if (!cfg.enabled) return
       const state = getSession(states, input.sessionID)
       updateModelState(state, input.model)
+      state.agent = input.agent || input.agentID || input.agentName || state.agent
       const level = levelFor(estimateCurrent(state), cfg)
       state.thresholdCrossed = level === "handoff"
+      if (level === "handoff" && !state.handoffRequested) {
+        state.handoffRequested = true
+        await writeLog(ctx, cfg, `auto-continue requested session=${state.sessionID} source=system.transform`)
+      }
       if (!shouldInject(level, cfg)) return
       output.system.push(budgetNote(state, cfg, "system.transform"))
       await writeLog(
@@ -256,6 +492,10 @@ async function server(ctx, options) {
       state.pendingEstimatedTokens += added
       const level = levelFor(estimateCurrent(state), cfg)
       state.thresholdCrossed = level === "handoff"
+      if (level === "handoff" && !state.handoffRequested) {
+        state.handoffRequested = true
+        await writeLog(ctx, cfg, `auto-continue requested session=${state.sessionID} source=tool.execute.after`)
+      }
       await writeLog(
         ctx,
         cfg,

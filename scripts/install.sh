@@ -98,7 +98,7 @@ prompt handoff "Handoff threshold tokens" "$default_handoff"
 prompt reserve "Reserved output tokens" "$default_reserve"
 prompt estimate "Estimated chars per token; lower is more conservative" "3"
 prompt log_enabled "Enable debug log? true/false" "false"
-prompt handoff_instruction "Handoff instruction" "Write a handoff letter and stop. Include current goal, repo state, files touched, important decisions, commands run, test status, risks, and exact next steps."
+prompt handoff_instruction "Handoff instruction" "Write a handoff letter and stop. Put CONTEXT_GOVERNOR_HANDOFF on its own line, then include current goal, repo state, files touched, important decisions, commands run, test status, risks, and exact next steps."
 
 mkdir -p "$(dirname "$CONFIG_PATH")"
 if [ -f "$CONFIG_PATH" ]; then

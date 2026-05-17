@@ -16,7 +16,7 @@ NODE
 OUTPUT_FILE=".subagent-smoke-output.txt"
 rm -f "$OUTPUT_FILE"
 
-opencode run --command subagent-governor-smoke "$PROMPT" | tee "$OUTPUT_FILE"
+"${OPENCODE_BIN:-$HOME/.opencode/bin/opencode}" run --command subagent-governor-smoke "$PROMPT" | tee "$OUTPUT_FILE"
 
 node - <<'NODE'
 const fs = require("node:fs")
