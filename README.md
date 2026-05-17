@@ -70,6 +70,8 @@ In any project, create or edit `.opencode/opencode.json`:
         "appendToolWarnings": true,
         "mutateUserMessageAtHandoff": true,
         "autoContinue": "off",
+        "autoContinueSubagents": "prepare-only",
+        "autoContinueSelectTuiForSubagents": false,
         "log": false,
         "handoffInstruction": "Write a handoff letter and stop. Put CONTEXT_GOVERNOR_HANDOFF on its own line, then include current goal, repo state, files touched, important decisions, commands run, test status, risks, and exact next steps."
       }
@@ -159,6 +161,24 @@ Full prompt-async mode creates the child session and immediately asks it to cont
 
 Auto-continue creates the child with the previous session as `parentID`, sends the continuation with OpenCode `session.promptAsync`, and best-effort switches the TUI using OpenCode's internal transport endpoint `/tui/select-session`. That TUI switch is version-sensitive; failures are logged when `log` is enabled but do not fail the handoff.
 
+### Subagent-aware auto-continue
+
+OpenCode Task-tool subagents run in their own sessions. The plugin treats a session as a subagent only when OpenCode exposes explicit Task metadata (for example `tool.execute.after` for `task` with `output.metadata.sessionId`) or deterministic subtask flags used by commands/tests. It does not guess from session counts or titles alone.
+
+Subagents have a separate auto-continue mode so orchestrator sessions can use full unattended continuation while Task sessions stay safe by default:
+
+```json
+{
+  "autoContinue": "prompt-async",
+  "autoContinueSubagents": "prepare-only",
+  "autoContinueSelectTuiForSubagents": false
+}
+```
+
+`autoContinueSubagents` accepts `inherit`, `off`, `prepare-only`, or `prompt-async`; default is `prepare-only`. `inherit` uses the global `autoContinue` mode for subagent sessions. `autoContinueSelectTuiForSubagents` defaults to `false`, so a subagent handoff does not steal focus from the orchestrator TUI even when `autoContinueSelectTui` is enabled.
+
+Important Task-tool limitation: when the plugin creates a continuation child for a subagent, that child session does not transparently return its result to the original Task-tool call. Use the default `prepare-only` policy for subagents unless you explicitly want the subagent continuation to run as a separate follow-up session.
+
 Anti-loop behavior:
 
 - A session can start only one continuation (`continuationStarted` prevents duplicates).
@@ -200,6 +220,7 @@ npm run smoke
 npm run smoke:subagent
 npm run smoke:auto-prepare
 npm run smoke:auto-prompt-async
+npm run smoke:auto-subagent
 ```
 
 The top-level smoke test uses `test-fixture/.opencode/opencode.json`, which has tiny thresholds so handoff triggers immediately.
@@ -228,7 +249,9 @@ Expected behavior: OpenCode should run, the plugin should inject a context-budge
 - `log`: write debug log to `.context-governor.log` in the project root.
 - `handoffInstruction`: custom instruction used when threshold is crossed.
 - `autoContinue`: `off`, `prepare-only`, or `prompt-async`; default `off`.
+- `autoContinueSubagents`: `inherit`, `off`, `prepare-only`, or `prompt-async` for explicit Task/subagent sessions; default `prepare-only`.
 - `autoContinueSelectTui`: best-effort switch to the child session in the OpenCode TUI; default `true`.
+- `autoContinueSelectTuiForSubagents`: allow TUI switching for subagent-created continuation children; default `false`.
 - `autoContinueMaxChain`: maximum nested auto-continuation depth; default `3`.
 - `autoContinueHandoffMarker`: required marker in the assistant handoff; default `CONTEXT_GOVERNOR_HANDOFF`.
 - `autoContinueStateFile`: JSONL audit file; default `.context-governor-handoffs.jsonl`.

@@ -12,11 +12,12 @@
     "opencode": ">=1.14.0"
   },
   "scripts": {
-    "check": "node --check src/plugin.js && bash -n scripts/install.sh && bash -n scripts/subagent-smoke.sh && bash -n scripts/auto-continue-prepare-smoke.sh && bash -n scripts/auto-continue-prompt-async-smoke.sh",
+    "check": "node --check src/plugin.js && bash -n scripts/install.sh && bash -n scripts/subagent-smoke.sh && bash -n scripts/auto-continue-prepare-smoke.sh && bash -n scripts/auto-continue-prompt-async-smoke.sh && bash -n scripts/auto-continue-subagent-smoke.sh",
     "smoke": "cd test-fixture && ${OPENCODE_BIN:-$HOME/.opencode/bin/opencode} run 'Say hello in one sentence. If you see CONTEXT BUDGET HANDOFF REQUIRED, follow it exactly.'",
     "smoke:subagent": "bash scripts/subagent-smoke.sh",
     "smoke:auto-prepare": "bash scripts/auto-continue-prepare-smoke.sh",
-    "smoke:auto-prompt-async": "bash scripts/auto-continue-prompt-async-smoke.sh"
+    "smoke:auto-prompt-async": "bash scripts/auto-continue-prompt-async-smoke.sh",
+    "smoke:auto-subagent": "bash scripts/auto-continue-subagent-smoke.sh"
   },
   "keywords": [
     "opencode",

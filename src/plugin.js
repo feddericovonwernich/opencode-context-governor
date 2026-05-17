@@ -10,7 +10,9 @@ const DEFAULTS = {
   mutateUserMessageAtHandoff: true,
   log: false,
   autoContinue: "off",
+  autoContinueSubagents: "prepare-only",
   autoContinueSelectTui: true,
+  autoContinueSelectTuiForSubagents: false,
   autoContinueMaxChain: 3,
   autoContinueHandoffMarker: "CONTEXT_GOVERNOR_HANDOFF",
   autoContinueStateFile: ".context-governor-handoffs.jsonl",
@@ -37,6 +39,12 @@ function normalizeAutoContinueMode(value) {
   return ["off", "prepare-only", "prompt-async"].includes(value) ? value : DEFAULTS.autoContinue
 }
 
+function normalizeSubagentAutoContinueMode(value) {
+  return ["inherit", "off", "prepare-only", "prompt-async"].includes(value)
+    ? value
+    : DEFAULTS.autoContinueSubagents
+}
+
 function normalizeOptions(options = {}) {
   return {
     enabled: booleanOption(options.enabled, DEFAULTS.enabled),
@@ -53,7 +61,12 @@ function normalizeOptions(options = {}) {
     ),
     log: booleanOption(options.log, DEFAULTS.log),
     autoContinue: normalizeAutoContinueMode(options.autoContinue),
+    autoContinueSubagents: normalizeSubagentAutoContinueMode(options.autoContinueSubagents),
     autoContinueSelectTui: booleanOption(options.autoContinueSelectTui, DEFAULTS.autoContinueSelectTui),
+    autoContinueSelectTuiForSubagents: booleanOption(
+      options.autoContinueSelectTuiForSubagents,
+      DEFAULTS.autoContinueSelectTuiForSubagents,
+    ),
     autoContinueMaxChain: Math.max(0, Math.floor(numberOption(options.autoContinueMaxChain, DEFAULTS.autoContinueMaxChain))),
     autoContinueHandoffMarker: stringOption(
       options.autoContinueHandoffMarker,
@@ -98,6 +111,8 @@ function getSession(states, sessionID) {
     continuationStarted: false,
     childSessionID: undefined,
     chainDepth: 0,
+    kind: "orchestrator",
+    parentSessionID: undefined,
     agent: undefined,
     lastUpdated: Date.now(),
   }
@@ -120,6 +135,21 @@ function shouldInject(level, cfg) {
   if (cfg.noteMode === "always") return true
   if (cfg.noteMode === "warn") return level === "warn" || level === "handoff"
   return level === "handoff"
+}
+
+function isSubagentSession(state) {
+  return state?.kind === "subagent"
+}
+
+function effectiveAutoContinueMode(cfg, state) {
+  if (!isSubagentSession(state)) return cfg.autoContinue
+  return cfg.autoContinueSubagents === "inherit" ? cfg.autoContinue : cfg.autoContinueSubagents
+}
+
+function shouldSelectTuiForSession(cfg, state) {
+  if (!cfg.autoContinueSelectTui) return false
+  if (isSubagentSession(state)) return cfg.autoContinueSelectTuiForSubagents
+  return true
 }
 
 function contextFromModel(model) {
@@ -214,6 +244,92 @@ function eventType(event) {
   )
 }
 
+function firstString(...values) {
+  return values.find((value) => typeof value === "string" && value.trim())
+}
+
+function hasExplicitSubagentFlag(...values) {
+  return values.some((value) => value === true || value === "true" || value === "subagent" || value === "subtask")
+}
+
+function markSubagentState(state, parentSessionID) {
+  if (!state || state.kind === "continuation-child") return false
+  state.kind = "subagent"
+  state.parentSessionID = parentSessionID || state.parentSessionID
+  state.lastUpdated = Date.now()
+  return true
+}
+
+function markSubagentSession(states, sessionID, parentSessionID) {
+  if (!sessionID) return false
+  return markSubagentState(getSession(states, sessionID), parentSessionID)
+}
+
+function markSubagentFromExplicitFlags(states, state, input, event) {
+  const props = event?.properties || {}
+  const flagged = hasExplicitSubagentFlag(
+    input?.subtask,
+    input?.subagent,
+    input?.command?.subtask,
+    input?.command?.subagent,
+    input?.session?.subtask,
+    input?.session?.subagent,
+    props.subtask,
+    props.subagent,
+    props.session?.subtask,
+    props.session?.subagent,
+    props.info?.subtask,
+    props.info?.subagent,
+    event?.subtask,
+    event?.subagent,
+  )
+  return flagged ? markSubagentState(state, firstString(input?.parentSessionID, input?.parentID, props.parentSessionID, props.parentID)) : false
+}
+
+function markSubagentFromTaskTool(states, input, output) {
+  if (input?.tool !== "task") return false
+  const childSessionID = firstString(
+    output?.metadata?.sessionId,
+    output?.metadata?.sessionID,
+    output?.metadata?.session_id,
+    output?.metadata?.session?.id,
+  )
+  const parentSessionID = firstString(
+    output?.metadata?.parentSessionId,
+    output?.metadata?.parentSessionID,
+    output?.metadata?.parent_session_id,
+    input?.sessionID,
+    input?.session_id,
+  )
+  return markSubagentSession(states, childSessionID, parentSessionID)
+}
+
+function markSubagentFromTaskPart(states, event) {
+  const props = event?.properties || {}
+  const part = props.part || props.message?.part || event?.part || event?.message?.part
+  const tool = part?.tool || part?.name || part?.input?.tool || part?.state?.input?.tool
+  if (tool !== "task") return false
+  const childSessionID = firstString(
+    part?.state?.metadata?.sessionId,
+    part?.state?.metadata?.sessionID,
+    part?.state?.metadata?.session_id,
+    part?.metadata?.sessionId,
+    part?.metadata?.sessionID,
+    part?.metadata?.session_id,
+  )
+  const parentSessionID = firstString(
+    part?.state?.metadata?.parentSessionId,
+    part?.state?.metadata?.parentSessionID,
+    part?.metadata?.parentSessionId,
+    part?.metadata?.parentSessionID,
+    props.sessionID,
+    props.session_id,
+    event?.sessionID,
+    event?.session_id,
+  )
+  return markSubagentSession(states, childSessionID, parentSessionID)
+}
+
 function isAssistantRole(value) {
   return value?.role === "assistant" || value?.message?.role === "assistant"
 }
@@ -297,8 +413,8 @@ function childSessionIDFromCreate(result) {
   return result?.id || result?.sessionID || result?.session?.id || result?.data?.id || result?.data?.sessionID || result?.data?.session?.id
 }
 
-async function selectTuiSession(ctx, cfg, sessionID) {
-  if (!cfg.autoContinueSelectTui || !sessionID) return
+async function selectTuiSession(ctx, cfg, state, sessionID) {
+  if (!shouldSelectTuiForSession(cfg, state) || !sessionID) return
   try {
     const response = await ctx.client?._client?.post?.({
       url: "/tui/select-session",
@@ -312,12 +428,15 @@ async function selectTuiSession(ctx, cfg, sessionID) {
 }
 
 async function createContinuationSession(ctx, cfg, states, state) {
+  const mode = effectiveAutoContinueMode(cfg, state)
   const title = `${cfg.autoContinueTitlePrefix}: ${state.sessionID}`
-  const noReply = cfg.autoContinue === "prepare-only"
+  const noReply = mode === "prepare-only"
   const record = {
     time: new Date().toISOString(),
-    mode: cfg.autoContinue,
+    mode,
     parentSessionID: state.sessionID,
+    parentKind: state.kind,
+    sourceParentSessionID: state.parentSessionID,
     chainDepth: state.chainDepth,
     marker: cfg.autoContinueHandoffMarker,
   }
@@ -333,8 +452,10 @@ async function createContinuationSession(ctx, cfg, states, state) {
 
     const childState = getSession(states, childID)
     childState.chainDepth = state.chainDepth + 1
+    childState.kind = "continuation-child"
+    childState.parentSessionID = state.sessionID
 
-    await selectTuiSession(ctx, cfg, childID)
+    await selectTuiSession(ctx, cfg, state, childID)
 
     const body = {
       noReply,
@@ -346,10 +467,10 @@ async function createContinuationSession(ctx, cfg, states, state) {
       query: { directory: ctx.directory },
       body,
     })
-    await selectTuiSession(ctx, cfg, childID)
+    await selectTuiSession(ctx, cfg, state, childID)
 
     await appendJsonl(ctx, cfg, { ...record, childSessionID: childID, noReply, status: "created" })
-    await writeLog(ctx, cfg, `auto-continue created parent=${state.sessionID} child=${childID} mode=${cfg.autoContinue} noReply=${noReply}`)
+    await writeLog(ctx, cfg, `auto-continue created parent=${state.sessionID} child=${childID} parentKind=${state.kind} mode=${mode} noReply=${noReply}`)
   } catch (error) {
     await appendJsonl(ctx, cfg, { ...record, status: "failed", error: String(error?.message || error) })
     await writeLog(ctx, cfg, `auto-continue failed parent=${state.sessionID} error=${error?.message || error}`)
@@ -357,7 +478,8 @@ async function createContinuationSession(ctx, cfg, states, state) {
 }
 
 async function maybeStartContinuation(ctx, cfg, states, state) {
-  if (cfg.autoContinue === "off") return
+  const mode = effectiveAutoContinueMode(cfg, state)
+  if (mode === "off") return
   if (!state.handoffRequested || !state.handoffMarkerSeen || !state.assistantFinished) return
   if (state.continuationStarted) return
   if (state.chainDepth >= cfg.autoContinueMaxChain) {
@@ -365,7 +487,7 @@ async function maybeStartContinuation(ctx, cfg, states, state) {
     return
   }
   state.continuationStarted = true
-  await writeLog(ctx, cfg, `auto-continue trigger parent=${state.sessionID} depth=${state.chainDepth} mode=${cfg.autoContinue}`)
+  await writeLog(ctx, cfg, `auto-continue trigger parent=${state.sessionID} kind=${state.kind} depth=${state.chainDepth} mode=${mode}`)
   await createContinuationSession(ctx, cfg, states, state)
 }
 
@@ -396,7 +518,9 @@ async function server(ctx, options) {
     event: async ({ event }) => {
       if (!cfg.enabled) return
       const part = extractStepFinishPart(event)
+      markSubagentFromTaskPart(states, event)
       const state = getSession(states, extractEventSessionID(event, part))
+      markSubagentFromExplicitFlags(states, state, undefined, event)
 
       if (state.handoffRequested) {
         const text = extractAssistantText(event)
@@ -434,6 +558,7 @@ async function server(ctx, options) {
     "chat.message": async (input, output) => {
       if (!cfg.enabled) return
       const state = getSession(states, input.sessionID)
+      markSubagentFromExplicitFlags(states, state, input)
       const text = (output.parts || [])
         .filter((part) => part?.type === "text")
         .map((part) => part.text || "")
@@ -468,6 +593,7 @@ async function server(ctx, options) {
     "experimental.chat.system.transform": async (input, output) => {
       if (!cfg.enabled) return
       const state = getSession(states, input.sessionID)
+      markSubagentFromExplicitFlags(states, state, input)
       updateModelState(state, input.model)
       state.agent = input.agent || input.agentID || input.agentName || state.agent
       const level = levelFor(estimateCurrent(state), cfg)
@@ -488,6 +614,8 @@ async function server(ctx, options) {
     "tool.execute.after": async (input, output) => {
       if (!cfg.enabled) return
       const state = getSession(states, input.sessionID)
+      markSubagentFromExplicitFlags(states, state, input)
+      markSubagentFromTaskTool(states, input, output)
       const added = estimateTextTokens(output.output || "", cfg.estimateCharsPerToken)
       state.pendingEstimatedTokens += added
       const level = levelFor(estimateCurrent(state), cfg)
