@@ -69,6 +69,16 @@ In any project, create or edit `.opencode/opencode.json`:
         "noteMode": "always",
         "appendToolWarnings": true,
         "mutateUserMessageAtHandoff": true,
+        "thresholdPrompts": [
+          {
+            "name": "procedure-reflection",
+            "threshold": 130000,
+            "once": true,
+            "appliesTo": "all",
+            "inject": "system",
+            "prompt": "Pause normal execution briefly for a procedural reflection before the context handoff threshold. Review the procedure, skills, and task workflow you have been executing: which instructions/skills were used, whether the task decomposition is still sound, what repeated friction or mistakes appeared, and what should be improved in future instructions, skills, smoke tests, or handoff conventions. If you discover a durable learning, explicitly recommend where it should be recorded. Keep it concise, then continue with the next concrete step unless a handoff is required."
+          }
+        ],
         "autoContinue": "off",
         "autoContinueSubagents": "prepare-only",
         "autoContinueSelectTuiForSubagents": false,
@@ -132,6 +142,38 @@ For quick testing, use very low thresholds:
   "log": true
 }
 ```
+
+## Procedural reflection prompts
+
+`thresholdPrompts` lets you inject advisory system notes at configurable token thresholds before handoff. The intended use is procedural reflection: the agent should briefly review the procedure, skills, task workflow, instruction quality, smoke tests, handoff conventions, and durable learnings it has been executing or discovering.
+
+These prompts are not generic task-planning prompts. They also do not force a stop, do not set `handoffRequested`, and do not trigger auto-continue by themselves. Auto-continue still requires the handoff threshold path plus a completed assistant response containing the configured handoff marker.
+
+Recommended pre-handoff reflection snippet:
+
+```json
+{
+  "thresholdPrompts": [
+    {
+      "name": "procedure-reflection",
+      "threshold": 130000,
+      "once": true,
+      "appliesTo": "all",
+      "inject": "system",
+      "prompt": "Pause normal execution briefly for a procedural reflection before the context handoff threshold. Review the procedure, skills, and task workflow you have been executing: which instructions/skills were used, whether the task decomposition is still sound, what repeated friction or mistakes appeared, and what should be improved in future instructions, skills, smoke tests, or handoff conventions. If you discover a durable learning, explicitly recommend where it should be recorded. Keep it concise, then continue with the next concrete step unless a handoff is required."
+    }
+  ]
+}
+```
+
+Prompt fields:
+
+- `name`: optional string identifier; defaults to `threshold-prompt-N`.
+- `threshold`: required non-negative token estimate. Invalid entries are ignored.
+- `prompt`: required non-empty instruction text. Invalid entries are ignored.
+- `once`: whether to inject only once per session; default `true`.
+- `appliesTo`: `all`, `orchestrator`, `subagent`, or `continuation-child`; default `all`.
+- `inject`: currently normalized to `system`.
 
 ## Auto-continue handoff
 
@@ -218,6 +260,7 @@ From this repository:
 npm run check
 npm run smoke
 npm run smoke:subagent
+npm run smoke:threshold-prompts
 npm run smoke:auto-prepare
 npm run smoke:auto-prompt-async
 npm run smoke:auto-subagent
@@ -246,6 +289,7 @@ Expected behavior: OpenCode should run, the plugin should inject a context-budge
 - `noteMode`: `always`, `warn`, or `handoff`.
 - `appendToolWarnings`: append budget warning to tool output after warning or handoff threshold.
 - `mutateUserMessageAtHandoff`: add a current-turn system instruction when the user message itself crosses threshold.
+- `thresholdPrompts`: optional array of advisory threshold-triggered system prompts for procedural reflection; invalid entries are ignored.
 - `log`: write debug log to `.context-governor.log` in the project root.
 - `handoffInstruction`: custom instruction used when threshold is crossed.
 - `autoContinue`: `off`, `prepare-only`, or `prompt-async`; default `off`.

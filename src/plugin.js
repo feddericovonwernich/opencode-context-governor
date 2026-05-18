@@ -8,6 +8,7 @@ const DEFAULTS = {
   noteMode: "always", // always | warn | handoff
   appendToolWarnings: true,
   mutateUserMessageAtHandoff: true,
+  thresholdPrompts: [],
   log: false,
   autoContinue: "off",
   autoContinueSubagents: "prepare-only",
@@ -45,6 +46,27 @@ function normalizeSubagentAutoContinueMode(value) {
     : DEFAULTS.autoContinueSubagents
 }
 
+function normalizeThresholdPrompts(value) {
+  if (!Array.isArray(value)) return DEFAULTS.thresholdPrompts
+  const appliesToValues = new Set(["all", "orchestrator", "subagent", "continuation-child"])
+  return value
+    .map((item, index) => {
+      if (!item || typeof item !== "object") return undefined
+      if (!Number.isFinite(item.threshold) || item.threshold < 0) return undefined
+      if (typeof item.prompt !== "string" || !item.prompt.trim()) return undefined
+      return {
+        name: stringOption(item.name, `threshold-prompt-${index + 1}`),
+        threshold: item.threshold,
+        prompt: item.prompt.trim(),
+        once: booleanOption(item.once, true),
+        appliesTo: appliesToValues.has(item.appliesTo) ? item.appliesTo : "all",
+        inject: "system",
+      }
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.threshold - right.threshold)
+}
+
 function normalizeOptions(options = {}) {
   return {
     enabled: booleanOption(options.enabled, DEFAULTS.enabled),
@@ -59,6 +81,7 @@ function normalizeOptions(options = {}) {
       options.mutateUserMessageAtHandoff,
       DEFAULTS.mutateUserMessageAtHandoff,
     ),
+    thresholdPrompts: normalizeThresholdPrompts(options.thresholdPrompts),
     log: booleanOption(options.log, DEFAULTS.log),
     autoContinue: normalizeAutoContinueMode(options.autoContinue),
     autoContinueSubagents: normalizeSubagentAutoContinueMode(options.autoContinueSubagents),
@@ -104,6 +127,7 @@ function getSession(states, sessionID) {
     modelID: undefined,
     providerID: undefined,
     thresholdCrossed: false,
+    triggeredThresholdPrompts: new Set(),
     handoffRequested: false,
     handoffMarkerSeen: false,
     handoffText: "",
@@ -135,6 +159,32 @@ function shouldInject(level, cfg) {
   if (cfg.noteMode === "always") return true
   if (cfg.noteMode === "warn") return level === "warn" || level === "handoff"
   return level === "handoff"
+}
+
+function thresholdPromptApplies(prompt, state) {
+  return prompt.appliesTo === "all" || prompt.appliesTo === state.kind
+}
+
+function crossedThresholdPrompts(cfg, state, estimated) {
+  return cfg.thresholdPrompts.filter((prompt) => {
+    if (estimated < prompt.threshold) return false
+    if (!thresholdPromptApplies(prompt, state)) return false
+    return !prompt.once || !state.triggeredThresholdPrompts.has(prompt.name)
+  })
+}
+
+function thresholdPromptNote(prompt, state, source = "system.transform") {
+  return [
+    `<context_governor_threshold_prompt name="${String(prompt.name).replaceAll('"', "&quot;")}">`,
+    `Source: ${source}`,
+    `Session kind: ${state.kind}`,
+    `Threshold: ${formatInt(prompt.threshold)} tokens`,
+    `Estimated current input context: ${formatInt(estimateCurrent(state))} tokens`,
+    "Purpose: procedural reflection before context quality degrades; this is advisory and does not request or trigger handoff/auto-continue.",
+    "Prompt:",
+    prompt.prompt,
+    `</context_governor_threshold_prompt>`,
+  ].join("\n")
 }
 
 function isSubagentSession(state) {
@@ -602,8 +652,23 @@ async function server(ctx, options) {
         state.handoffRequested = true
         await writeLog(ctx, cfg, `auto-continue requested session=${state.sessionID} source=system.transform`)
       }
-      if (!shouldInject(level, cfg)) return
-      output.system.push(budgetNote(state, cfg, "system.transform"))
+      const thresholdPrompts = crossedThresholdPrompts(cfg, state, estimateCurrent(state))
+      let injected = false
+      if (shouldInject(level, cfg)) {
+        output.system.push(budgetNote(state, cfg, "system.transform"))
+        injected = true
+      }
+      for (const prompt of thresholdPrompts) {
+        output.system.push(thresholdPromptNote(prompt, state, "system.transform"))
+        state.triggeredThresholdPrompts.add(prompt.name)
+        injected = true
+        await writeLog(
+          ctx,
+          cfg,
+          `threshold-prompt session=${state.sessionID} name=${prompt.name} threshold=${prompt.threshold} source=system.transform`,
+        )
+      }
+      if (!injected) return
       await writeLog(
         ctx,
         cfg,
