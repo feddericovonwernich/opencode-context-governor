@@ -1,7 +1,7 @@
 ---
 name: opencode-context-governor
-description: Use when installing, configuring, testing, or troubleshooting the OpenCode Context Governor plugin in a project. Guides agents through curl installer usage, manual .opencode/opencode.json setup, threshold selection, and verification.
-version: 1.0.0
+description: Use when installing, configuring, testing, or troubleshooting the OpenCode Context Governor plugin in a project. Guides agents through curl installer usage, manual .opencode/opencode.json setup, threshold selection, auto-continue, procedural reflection prompts, and verification.
+version: 1.1.0
 author: Hermes Agent
 license: MIT
 metadata:
@@ -14,9 +14,9 @@ metadata:
 
 ## Overview
 
-OpenCode Context Governor is a plugin-only context-budget guard for OpenCode. It makes the model aware of approximate context-window usage and can force a handoff once a configurable token threshold is crossed.
+OpenCode Context Governor is a plugin-only context-budget guard for OpenCode. It makes the model aware of approximate context-window usage, can inject configurable procedural reflection prompts at token thresholds, and can force a handoff once a configurable token threshold is crossed.
 
-Use this skill when an agent needs to install the plugin into a project, configure `.opencode/opencode.json`, choose sane token thresholds, run a low-threshold smoke test, or troubleshoot whether OpenCode loaded the plugin.
+Use this skill when an agent needs to install the plugin into a project, configure `.opencode/opencode.json`, choose sane token thresholds, configure auto-continue or threshold reflection prompts, run low-threshold smoke tests, or troubleshoot whether OpenCode loaded the plugin.
 
 The plugin intentionally avoids forking OpenCode. It uses supported OpenCode plugin hooks and conservative token estimates. Exact preflight provider request token counts are not available through plugin hooks, so thresholds should leave safety margin.
 
@@ -27,6 +27,7 @@ Use this skill when:
 - The user asks to install OpenCode Context Governor in a project.
 - The user asks to configure OpenCode to become context-window aware.
 - The user wants agents to hand off automatically near a context limit.
+- The user wants pre-handoff procedural reflection about skills, instructions, task workflow, or durable learnings.
 - The user wants a one-line curl installer for the plugin.
 - The user wants a low-threshold test configuration to prove handoff behavior.
 - An existing installation is not triggering context notes or handoff.
@@ -47,6 +48,10 @@ opencode-context-governor/
   package.json
   scripts/install.sh
   scripts/subagent-smoke.sh
+  scripts/auto-continue-prepare-smoke.sh
+  scripts/auto-continue-prompt-async-smoke.sh
+  scripts/auto-continue-subagent-smoke.sh
+  scripts/threshold-prompts-smoke.sh
   src/plugin.js
   skills/opencode-context-governor/SKILL.md
   test-fixture/.opencode/opencode.json
@@ -62,6 +67,10 @@ Key files:
 - `test-fixture/.opencode/opencode.json`: low-threshold fixture for smoke testing.
 - `scripts/subagent-smoke.sh`: deterministic subagent smoke test. It invokes an OpenCode command with `agent: general` and `subtask: true` so the Task-tool subagent path runs without relying on model choice.
 - `test-fixture-subagent/.opencode/command/subagent-governor-smoke.md`: command used by the subagent smoke test.
+- `scripts/auto-continue-prepare-smoke.sh`: deterministic mock smoke for prepare-only continuation.
+- `scripts/auto-continue-prompt-async-smoke.sh`: deterministic mock smoke for prompt-async continuation.
+- `scripts/auto-continue-subagent-smoke.sh`: deterministic mock smoke for subagent-aware continuation policy.
+- `scripts/threshold-prompts-smoke.sh`: deterministic mock smoke for threshold-triggered procedural reflection prompts.
 
 ## Fast Installation Path
 
@@ -122,8 +131,23 @@ Create or edit `.opencode/opencode.json` in the target project:
         "noteMode": "always",
         "appendToolWarnings": true,
         "mutateUserMessageAtHandoff": true,
+        "thresholdPrompts": [
+          {
+            "name": "procedure-reflection",
+            "threshold": 130000,
+            "once": true,
+            "appliesTo": "all",
+            "inject": "system",
+            "prompt": "Pause normal execution briefly for a procedural reflection before the context handoff threshold. Review the procedure, skills, and task workflow you have been executing: which instructions/skills were used, whether the task decomposition is still sound, what repeated friction or mistakes appeared, and what should be improved in future instructions, skills, smoke tests, or handoff conventions. If you discover a durable learning, explicitly recommend where it should be recorded. Keep it concise, then continue with the next concrete step unless a handoff is required."
+          }
+        ],
+        "autoContinue": "off",
+        "autoContinueSubagents": "prepare-only",
+        "autoContinueSelectTui": true,
+        "autoContinueSelectTuiForSubagents": false,
+        "autoContinueMaxChain": 3,
         "log": false,
-        "handoffInstruction": "Write a handoff letter and stop. Include current goal, repo state, files touched, important decisions, commands run, test status, risks, and exact next steps."
+        "handoffInstruction": "Write a handoff letter and stop. Put CONTEXT_GOVERNOR_HANDOFF on its own line, then include current goal, repo state, files touched, important decisions, commands run, test status, risks, and exact next steps."
       }
     ]
   ]
@@ -188,12 +212,82 @@ Use test thresholds only to verify behavior quickly:
 
 Do not set `handoffThreshold` close to the advertised context maximum. The plugin is conservative, but it does not have exact final request token counts.
 
+## Procedural Reflection Prompts
+
+Use `thresholdPrompts` for pre-handoff reflection that improves future agent behavior without stopping the current task. These prompts are injected as system notes when the estimated token threshold is crossed. They do **not** request handoff, do **not** create child sessions, and do **not** trigger auto-continue.
+
+Recommended pre-handoff reflection for agent workflows:
+
+```json
+{
+  "thresholdPrompts": [
+    {
+      "name": "procedure-reflection",
+      "threshold": 130000,
+      "once": true,
+      "appliesTo": "all",
+      "inject": "system",
+      "prompt": "Pause normal execution briefly for a procedural reflection before the context handoff threshold. Review the procedure, skills, and task workflow you have been executing: which instructions/skills were used, whether the task decomposition is still sound, what repeated friction or mistakes appeared, and what should be improved in future instructions, skills, smoke tests, or handoff conventions. If you discover a durable learning, explicitly recommend where it should be recorded. Keep it concise, then continue with the next concrete step unless a handoff is required."
+    }
+  ]
+}
+```
+
+Supported fields:
+
+- `name`: stable prompt identifier used for once-per-session tracking.
+- `threshold`: token estimate at which to inject the prompt.
+- `prompt`: instruction text.
+- `once`: defaults to `true`; set `false` only for prompts that should repeat every request after crossing the threshold.
+- `appliesTo`: `all`, `orchestrator`, `subagent`, or `continuation-child`.
+- `inject`: currently normalized to `system`.
+
+## Auto-Continue Handoff
+
+Automatic continuation is opt-in. Keep `autoContinue: "off"` unless the user explicitly wants unattended continuation.
+
+Safe prepare-only mode creates a child session, deposits the handoff prompt, and does not ask the child model to answer:
+
+```json
+{
+  "autoContinue": "prepare-only",
+  "autoContinueMaxChain": 3,
+  "autoContinueSelectTui": true
+}
+```
+
+Full prompt-async mode creates the child session and immediately asks it to continue:
+
+```json
+{
+  "autoContinue": "prompt-async",
+  "autoContinueMaxChain": 3,
+  "autoContinueSelectTui": true
+}
+```
+
+For Task-tool subagents, prefer the default conservative policy:
+
+```json
+{
+  "autoContinue": "prompt-async",
+  "autoContinueSubagents": "prepare-only",
+  "autoContinueSelectTuiForSubagents": false
+}
+```
+
+Reason: a continuation child created for a subagent does not transparently return its result to the original Task-tool call. The orchestrator should remain the source of truth unless the user explicitly opts into separate subagent continuation sessions.
+
 ## Verification Workflow
 
 From the plugin repository:
 
 ```sh
 npm run check
+npm run smoke:threshold-prompts
+npm run smoke:auto-prepare
+npm run smoke:auto-prompt-async
+npm run smoke:auto-subagent
 npm run smoke
 npm run smoke:subagent
 ```
@@ -203,6 +297,8 @@ Expected results:
 - `node --check src/plugin.js` succeeds.
 - `bash -n scripts/install.sh` succeeds if installer validation is included in `npm run check`.
 - `bash -n scripts/subagent-smoke.sh` succeeds if subagent smoke validation is included in `npm run check`.
+- `npm run smoke:threshold-prompts` validates procedural reflection prompt injection, once semantics, no accidental auto-continue, subagent targeting, and invalid prompt handling.
+- `npm run smoke:auto-prepare`, `npm run smoke:auto-prompt-async`, and `npm run smoke:auto-subagent` validate auto-continue modes with deterministic mocks.
 - `npm run smoke` runs OpenCode from `test-fixture/`.
 - The top-level smoke test should produce a context-governor handoff message because test thresholds are tiny.
 - `npm run smoke:subagent` runs OpenCode from `test-fixture-subagent/` using a deterministic command marked `agent: general` and `subtask: true`; it should observe at least two session IDs in `.context-governor.log` and output `SUBAGENT_CONTEXT_GOVERNOR_HANDOFF`.
@@ -240,17 +336,24 @@ Then rerun OpenCode and inspect `.context-governor.log` in the project root.
    - Confirm `noteMode` is `always` or `handoff`.
    - Confirm `enabled` is not `false`.
    - Remember that production thresholds may require a large context before triggering.
+   - Confirm the assistant response includes the configured marker, default `CONTEXT_GOVERNOR_HANDOFF`, when auto-continue is expected.
 
-3. Handoff triggers too early.
+3. Procedural reflection prompt never appears.
+   - Confirm `thresholdPrompts` is an array and each entry has a numeric `threshold` and non-empty `prompt`.
+   - Lower the prompt threshold temporarily to `0` for a deterministic test.
+   - Confirm `appliesTo` matches the session kind: `all`, `orchestrator`, `subagent`, or `continuation-child`.
+   - Remember `once` defaults to `true`, so a prompt should appear only once per session.
+
+4. Handoff triggers too early.
    - Increase `informThreshold`, `warnThreshold`, and `handoffThreshold`.
    - Increase `estimateCharsPerToken` slightly if estimates are too conservative.
    - Increase `reserveOutputTokens` only if you want more completion headroom, not later handoff.
 
-4. Existing OpenCode config was modified incorrectly.
+5. Existing OpenCode config was modified incorrectly.
    - Restore from `opencode.json.bak.<timestamp>` created by the installer.
    - Reapply the plugin entry manually, preserving unrelated OpenCode settings.
 
-5. Curl installer points to the wrong repository.
+6. Curl installer points to the wrong repository.
    - Use `OPENCODE_CONTEXT_GOVERNOR_RAW_BASE` for forks.
    - Use `OPENCODE_CONTEXT_GOVERNOR_PLUGIN_URL` for a direct plugin URL.
 
@@ -264,8 +367,9 @@ When using this skill as an agent:
 4. Prefer the guided installer for normal user setup.
 5. Prefer manual config for local development, tests, or when the repository has not been pushed to GitHub yet.
 6. Use low thresholds for smoke tests, then restore production or user-selected thresholds.
-7. Never preserve credentials, API keys, tokens, or passwords in handoff instructions or logs. Redact secrets as `[REDACTED]`.
-8. Verify with `npm run check` in the plugin repo and an `opencode run` smoke test in the target project when feasible.
+7. When configuring `thresholdPrompts`, prefer procedural reflection over generic task planning: ask the agent to review procedure, skills, instructions, task decomposition, tests, handoff conventions, and durable learnings.
+8. Never preserve credentials, API keys, tokens, or passwords in handoff instructions, reflection prompts, or logs. Redact secrets as `[REDACTED]`.
+9. Verify with `npm run check` in the plugin repo and an `opencode run` smoke test in the target project when feasible.
 
 ## Common Pitfalls
 
@@ -289,7 +393,9 @@ When using this skill as an agent:
 - [ ] `src/plugin.js` exists and passes syntax check.
 - [ ] `scripts/install.sh` exists, is executable, and passes `bash -n`.
 - [ ] README includes curl installer and manual config examples.
+- [ ] Skill and README examples include current options for `autoContinue`, `autoContinueSubagents`, and `thresholdPrompts` when relevant.
 - [ ] Target project has `.opencode/opencode.json` with the plugin entry.
 - [ ] Existing OpenCode config was preserved or backed up.
 - [ ] Smoke test passes or debug log confirms plugin load.
+- [ ] `npm run smoke:threshold-prompts` passes when reflection prompt behavior changed.
 - [ ] Production thresholds are restored after low-threshold testing.
