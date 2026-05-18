@@ -47,6 +47,7 @@ opencode-context-governor/
   README.md
   package.json
   scripts/install.sh
+  scripts/update-hermes-skill.sh
   scripts/subagent-smoke.sh
   scripts/auto-continue-prepare-smoke.sh
   scripts/auto-continue-prompt-async-smoke.sh
@@ -63,6 +64,7 @@ Key files:
 
 - `src/plugin.js`: the OpenCode plugin.
 - `scripts/install.sh`: guided installer for end users.
+- `scripts/update-hermes-skill.sh`: local updater that finds/installs this bundled Hermes skill under `$HERMES_HOME/skills` or `~/.hermes/skills`.
 - `README.md`: human-facing installation and configuration instructions.
 - `test-fixture/.opencode/opencode.json`: low-threshold fixture for smoke testing.
 - `scripts/subagent-smoke.sh`: deterministic subagent smoke test. It invokes an OpenCode command with `agent: general` and `subtask: true` so the Task-tool subagent path runs without relying on model choice.
@@ -109,6 +111,27 @@ Variables:
 - `OPENCODE_CONTEXT_GOVERNOR_RAW_BASE`: base URL used to fetch repository files.
 - `OPENCODE_CONTEXT_GOVERNOR_PLUGIN_URL`: direct URL for `plugin.js`; overrides `RAW_BASE`.
 - `OPENCODE_CONTEXT_GOVERNOR_HOME`: local directory where `plugin.js` is installed.
+
+## Updating This Hermes Skill
+
+If the user already installed this repository's Hermes skill elsewhere, update it from a fresh checkout with:
+
+```sh
+scripts/update-hermes-skill.sh
+```
+
+The script searches `$HERMES_HOME/skills` or `~/.hermes/skills` for a skill named `opencode-context-governor`, backs up the existing `SKILL.md`, then copies `skills/opencode-context-governor/SKILL.md` from the repository. If no installed copy is found, it installs into `~/.hermes/skills/opencode-context-governor` by default.
+
+Useful options:
+
+```sh
+scripts/update-hermes-skill.sh --dry-run
+scripts/update-hermes-skill.sh --no-install
+scripts/update-hermes-skill.sh --hermes-home ~/.hermes/profiles/wiki-importacion-china
+scripts/update-hermes-skill.sh --target-dir ~/.hermes/skills/opencode-context-governor
+```
+
+Use `--dry-run` first on unfamiliar machines. Use `--hermes-home` for profile-specific Hermes homes.
 
 ## Manual Configuration
 

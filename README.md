@@ -245,7 +245,24 @@ The skill gives agents a repeatable workflow for:
 - debugging plugin-load issues,
 - preserving existing OpenCode config safely.
 
-If you want to use it as a personal Hermes skill, copy or symlink it into your Hermes skills directory, for example:
+If you want to use it as a personal Hermes skill, install or update it from this checkout with:
+
+```sh
+scripts/update-hermes-skill.sh
+```
+
+The updater searches `$HERMES_HOME/skills` or `~/.hermes/skills` for an installed `opencode-context-governor` skill, backs up an existing `SKILL.md`, then copies the repository version. If no copy exists, it installs into `~/.hermes/skills/opencode-context-governor` by default.
+
+Useful variants:
+
+```sh
+scripts/update-hermes-skill.sh --dry-run
+scripts/update-hermes-skill.sh --no-install
+scripts/update-hermes-skill.sh --hermes-home ~/.hermes/profiles/wiki-importacion-china
+scripts/update-hermes-skill.sh --target-dir ~/.hermes/skills/opencode-context-governor
+```
+
+Manual copy still works if you prefer:
 
 ```sh
 mkdir -p ~/.hermes/skills/opencode-context-governor
