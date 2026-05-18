@@ -230,7 +230,7 @@ Anti-loop behavior:
 
 ## Agent skill
 
-This repository includes a bundled Hermes skill for agents that need to install, configure, test, or troubleshoot the plugin:
+This repository includes a bundled agent skill for agents that need to install, configure, test, or troubleshoot the plugin:
 
 ```text
 skills/opencode-context-governor/SKILL.md
@@ -245,28 +245,50 @@ The skill gives agents a repeatable workflow for:
 - debugging plugin-load issues,
 - preserving existing OpenCode config safely.
 
-If you want to use it as a personal Hermes skill, install or update it from this checkout with:
+If your target machine uses OpenCode, install or update the skill from this checkout with:
 
 ```sh
-scripts/update-hermes-skill.sh
+scripts/update-agent-skill.sh --harness opencode
 ```
 
-The updater searches `$HERMES_HOME/skills` or `~/.hermes/skills` for an installed `opencode-context-governor` skill, backs up an existing `SKILL.md`, then copies the repository version. If no copy exists, it installs into `~/.hermes/skills/opencode-context-governor` by default.
+By default this writes the OpenCode global skill copy to:
+
+```text
+~/.config/opencode/skills/opencode-context-governor/SKILL.md
+```
+
+For a project-local OpenCode skill instead, use:
+
+```sh
+scripts/update-agent-skill.sh --harness opencode --project-dir /path/to/project
+```
+
+The generalized updater can also materialize the same skill for other harnesses:
+
+```sh
+scripts/update-agent-skill.sh --harness hermes
+scripts/update-agent-skill.sh --harness claude
+scripts/update-agent-skill.sh --harness agents
+scripts/update-agent-skill.sh --harness all --dry-run
+```
 
 Useful variants:
 
 ```sh
-scripts/update-hermes-skill.sh --dry-run
-scripts/update-hermes-skill.sh --no-install
-scripts/update-hermes-skill.sh --hermes-home ~/.hermes/profiles/wiki-importacion-china
-scripts/update-hermes-skill.sh --target-dir ~/.hermes/skills/opencode-context-governor
+scripts/update-agent-skill.sh --dry-run
+scripts/update-agent-skill.sh --no-install
+scripts/update-agent-skill.sh --harness hermes --hermes-home ~/.hermes/profiles/wiki-importacion-china
+scripts/update-agent-skill.sh --harness opencode --opencode-home ~/.config/opencode
+scripts/update-agent-skill.sh --harness opencode --target-dir ~/.config/opencode/skills/opencode-context-governor
 ```
 
-Manual copy still works if you prefer:
+The updater searches the selected harness' skill roots, backs up an existing `SKILL.md`, then copies or exports the repository version. If no copy exists, it installs into that harness' default skill directory unless `--no-install` is set.
+
+The older Hermes-specific entrypoint is still available as a compatibility wrapper:
 
 ```sh
-mkdir -p ~/.hermes/skills/opencode-context-governor
-cp skills/opencode-context-governor/SKILL.md ~/.hermes/skills/opencode-context-governor/SKILL.md
+scripts/update-hermes-skill.sh --dry-run
+scripts/update-hermes-skill.sh
 ```
 
 ## Test locally

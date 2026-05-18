@@ -1,7 +1,7 @@
 ---
 name: opencode-context-governor
 description: Use when installing, configuring, testing, or troubleshooting the OpenCode Context Governor plugin in a project. Guides agents through curl installer usage, manual .opencode/opencode.json setup, threshold selection, auto-continue, procedural reflection prompts, and verification.
-version: 1.1.0
+version: 1.2.0
 author: Hermes Agent
 license: MIT
 metadata:
@@ -47,6 +47,7 @@ opencode-context-governor/
   README.md
   package.json
   scripts/install.sh
+  scripts/update-agent-skill.sh
   scripts/update-hermes-skill.sh
   scripts/subagent-smoke.sh
   scripts/auto-continue-prepare-smoke.sh
@@ -64,7 +65,8 @@ Key files:
 
 - `src/plugin.js`: the OpenCode plugin.
 - `scripts/install.sh`: guided installer for end users.
-- `scripts/update-hermes-skill.sh`: local updater that finds/installs this bundled Hermes skill under `$HERMES_HOME/skills` or `~/.hermes/skills`.
+- `scripts/update-agent-skill.sh`: generalized local updater that finds/installs this bundled skill for OpenCode, Hermes, Claude-compatible, or generic agent-compatible skill directories.
+- `scripts/update-hermes-skill.sh`: compatibility wrapper around `scripts/update-agent-skill.sh --harness hermes`.
 - `README.md`: human-facing installation and configuration instructions.
 - `test-fixture/.opencode/opencode.json`: low-threshold fixture for smoke testing.
 - `scripts/subagent-smoke.sh`: deterministic subagent smoke test. It invokes an OpenCode command with `agent: general` and `subtask: true` so the Task-tool subagent path runs without relying on model choice.
@@ -112,26 +114,42 @@ Variables:
 - `OPENCODE_CONTEXT_GOVERNOR_PLUGIN_URL`: direct URL for `plugin.js`; overrides `RAW_BASE`.
 - `OPENCODE_CONTEXT_GOVERNOR_HOME`: local directory where `plugin.js` is installed.
 
-## Updating This Hermes Skill
+## Updating This Agent Skill
 
-If the user already installed this repository's Hermes skill elsewhere, update it from a fresh checkout with:
+If the target machine uses OpenCode, install or update this skill from a fresh checkout with:
 
 ```sh
-scripts/update-hermes-skill.sh
+scripts/update-agent-skill.sh --harness opencode
 ```
 
-The script searches `$HERMES_HOME/skills` or `~/.hermes/skills` for a skill named `opencode-context-governor`, backs up the existing `SKILL.md`, then copies `skills/opencode-context-governor/SKILL.md` from the repository. If no installed copy is found, it installs into `~/.hermes/skills/opencode-context-governor` by default.
+This writes the OpenCode global skill copy to `~/.config/opencode/skills/opencode-context-governor/SKILL.md` by default. For a project-local OpenCode skill, use:
+
+```sh
+scripts/update-agent-skill.sh --harness opencode --project-dir /path/to/project
+```
+
+The same updater supports other agent harnesses:
+
+```sh
+scripts/update-agent-skill.sh --harness hermes
+scripts/update-agent-skill.sh --harness claude
+scripts/update-agent-skill.sh --harness agents
+scripts/update-agent-skill.sh --harness all --dry-run
+```
 
 Useful options:
 
 ```sh
-scripts/update-hermes-skill.sh --dry-run
-scripts/update-hermes-skill.sh --no-install
-scripts/update-hermes-skill.sh --hermes-home ~/.hermes/profiles/wiki-importacion-china
-scripts/update-hermes-skill.sh --target-dir ~/.hermes/skills/opencode-context-governor
+scripts/update-agent-skill.sh --dry-run
+scripts/update-agent-skill.sh --no-install
+scripts/update-agent-skill.sh --harness hermes --hermes-home ~/.hermes/profiles/wiki-importacion-china
+scripts/update-agent-skill.sh --harness opencode --opencode-home ~/.config/opencode
+scripts/update-agent-skill.sh --harness opencode --target-dir ~/.config/opencode/skills/opencode-context-governor
 ```
 
-Use `--dry-run` first on unfamiliar machines. Use `--hermes-home` for profile-specific Hermes homes.
+The script searches the selected harness' skill roots for a skill named `opencode-context-governor`, backs up an existing `SKILL.md`, then copies or exports `skills/opencode-context-governor/SKILL.md` from the repository. If no installed copy is found, it installs into that harness' default skill directory unless `--no-install` is set.
+
+Use `--dry-run` first on unfamiliar machines. The older `scripts/update-hermes-skill.sh` entrypoint remains as a Hermes-only compatibility wrapper.
 
 ## Manual Configuration
 
